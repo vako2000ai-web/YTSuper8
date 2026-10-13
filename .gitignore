@@ -1,0 +1,26 @@
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+.vs/
+*.csproj
+*.sln
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.db
+*.sqlite
+*.sqlite3
+# Local broadcast credentials
+*.secret
+*.token
+Config/local.*
+# OS
+.DS_Store
+Thumbs.db
