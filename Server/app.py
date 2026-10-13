@@ -4,11 +4,14 @@ from pathlib import Path
 import sqlite3
 from contextlib import contextmanager
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "rollercoaster.sqlite3"
 app = FastAPI(title="Roller Coaster Heroes", version="0.1.0")
+# Local development dashboard only; restrict origins and add authentication before deployment.
+app.add_middleware(CORSMiddleware, allow_origins=["null","http://127.0.0.1:5500","http://localhost:5500"], allow_methods=["GET","POST"], allow_headers=["Content-Type"])
 
 @contextmanager
 def connection():
