@@ -14,32 +14,39 @@ namespace RollerCoasterHeroes
         static readonly CultureInfo English = CultureInfo.InvariantCulture;
         readonly Color ink = new Color(.045f, .08f, .15f, .94f);
         public Canvas Canvas { get; }
+        public bool ResultsVisible => results.activeSelf;
         public RideHud(Transform root)
         {
             font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             var go = new GameObject("First Ride 2.0 HUD", typeof(RectTransform)); go.transform.SetParent(root, false);
             Canvas = go.AddComponent<Canvas>(); Canvas.renderMode = RenderMode.ScreenSpaceOverlay; Canvas.sortingOrder = 10;
             var scaler = go.AddComponent<CanvasScaler>(); scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920, 1080); scaler.matchWidthOrHeight = .5f;
-            var top = Panel("Broadcast header", go.transform, new Vector2(48, -44), new Vector2(1824, 114), ink);
+            scaler.referenceResolution = new Vector2(1920, 1080);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
+            // Keep the broadcast composition centered and fully visible at any window aspect.
+            var safeFrame = new GameObject("HUD safe frame", typeof(RectTransform)).transform;
+            safeFrame.SetParent(go.transform, false);
+            var fitter = safeFrame.gameObject.AddComponent<AspectRatioFitter>();
+            fitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent; fitter.aspectRatio = 1920f / 1080f;
+            var top = Panel("Broadcast header", safeFrame, new Vector2(48, -44), new Vector2(1824, 114), ink);
             Label(top, "ROLLER COASTER HEROES", new Vector2(24, -15), new Vector2(700, 46), 34, Color.white);
             Label(top, "FIRST RIDE 2.0  /  GREEN HILLS", new Vector2(26, -65), new Vector2(650, 28), 20, RideArt.Teal);
             state = Label(top, "RACING", new Vector2(1510, -35), new Vector2(280, 45), 27, RideArt.Teal, TextAnchor.MiddleRight);
-            var stats = Panel("Race telemetry", go.transform, new Vector2(48, -180), new Vector2(310, 388), ink);
+            var stats = Panel("Race telemetry", safeFrame, new Vector2(48, -180), new Vector2(310, 388), ink);
             Label(stats, "RACER  /  FOX", new Vector2(24, -20), new Vector2(265, 36), 25, RideArt.Gold);
             time = Stat(stats, "TIME", 76); speed = Stat(stats, "SPEED  /  KM/H", 150);
             coins = Stat(stats, "COINS", 224); score = Stat(stats, "SCORE", 298);
-            var bottom = Panel("Route progress", go.transform, new Vector2(48, -940), new Vector2(1824, 96), ink);
+            var bottom = Panel("Route progress", safeFrame, new Vector2(48, -940), new Vector2(1824, 96), ink);
             Label(bottom, "START", new Vector2(24, -12), new Vector2(130, 30), 18, Color.white);
             Label(bottom, "FINISH", new Vector2(1660, -12), new Vector2(140, 30), 18, RideArt.Gold, TextAnchor.MiddleRight);
             var bar = Panel("Progress track", bottom, new Vector2(24, -52), new Vector2(1776, 12), new Color(.2f, .28f, .36f));
             var fill = Panel("Progress fill", bar, Vector2.zero, new Vector2(1776, 12), RideArt.Teal);
             progress = fill.GetComponent<Image>();
             // Use width rather than a filled sprite, so no texture assets are required.
-            controls = Label(go.transform, "", new Vector2(48, -885), new Vector2(1824, 34), 21, Color.white, TextAnchor.MiddleRight);
-            toast = Label(go.transform, "", new Vector2(530, -200), new Vector2(860, 70), 42, RideArt.Gold, TextAnchor.MiddleCenter);
+            controls = Label(safeFrame, "", new Vector2(48, -885), new Vector2(1824, 34), 21, Color.white, TextAnchor.MiddleRight);
+            toast = Label(safeFrame, "", new Vector2(530, -200), new Vector2(860, 70), 42, RideArt.Gold, TextAnchor.MiddleCenter);
             var shadow = toast.gameObject.AddComponent<Shadow>(); shadow.effectColor = ink; shadow.effectDistance = new Vector2(2, -3);
-            var card = Panel("Finish results", go.transform, new Vector2(1060, -330), new Vector2(790, 430), ink);
+            var card = Panel("Finish results", safeFrame, new Vector2(1060, -330), new Vector2(790, 430), ink);
             results = card.gameObject;
             Label(card, "RIDE COMPLETE!", new Vector2(40, -35), new Vector2(710, 65), 45, RideArt.Gold, TextAnchor.MiddleCenter);
             result = Label(card, "", new Vector2(40, -120), new Vector2(710, 90), 62, Color.white, TextAnchor.MiddleCenter);

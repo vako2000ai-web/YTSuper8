@@ -159,6 +159,7 @@ namespace FirstRide.Editor
                 }
                 if (!captured && game.Model.Seconds > 10)
                 {
+                    ValidateHudFits(game.Hud);
                     Capture(game, "TestResults/first-ride-2.0.png"); captured = true;
                     bool wasWide = game.Director.Wide, wasMuted = game.MusicMuted;
                     game.ToggleCamera(); Require(game.Director.Wide != wasWide, "camera mode toggle");
@@ -172,7 +173,8 @@ namespace FirstRide.Editor
                 if (finishCaptureAt == 0) finishCaptureAt = EditorApplication.timeSinceStartup + 2;
                 if (EditorApplication.timeSinceStartup < finishCaptureAt) return;
                 Require(game.Model.Coins == 62, "PlayMode collected all coins");
-                Require(game.Hud.Canvas.transform.Find("Finish results").gameObject.activeSelf, "finish results visible");
+                Require(game.Hud.ResultsVisible, "finish results visible");
+                ValidateHudFits(game.Hud);
                 if (!restarted)
                 {
                     Capture(game, "TestResults/first-ride-finish.png");
@@ -189,6 +191,19 @@ namespace FirstRide.Editor
             }
             catch (Exception ex) { Debug.LogException(ex); FinishSmoke(1); }
         }
+        static void ValidateHudFits(RideHud hud)
+        {
+            Canvas.ForceUpdateCanvases();
+            var corners = new Vector3[4];
+            foreach (var rect in hud.Canvas.GetComponentsInChildren<RectTransform>())
+            {
+                rect.GetWorldCorners(corners);
+                foreach (var corner in corners)
+                    Require(corner.x >= -2 && corner.x <= Screen.width + 2 &&
+                        corner.y >= -2 && corner.y <= Screen.height + 2, "HUD within screen: " + rect.name);
+            }
+        }
+
         static void Capture(FirstRideBootstrap game, string path)
         {
             var camera = game.Director.Camera; var canvas = game.Hud.Canvas;
