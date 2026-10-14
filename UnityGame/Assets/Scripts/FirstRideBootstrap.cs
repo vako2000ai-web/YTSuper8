@@ -1,280 +1,194 @@
 using System.Collections.Generic;
 using UnityEngine;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
-// Proof-of-concept, not a released/validated Unity scene.
-public class FirstRideBootstrap : MonoBehaviour
+namespace RollerCoasterHeroes
 {
-    private const int Samples = 360;
-    private readonly List<Vector3> points = new List<Vector3>();
-    private readonly List<Pickup> pickups = new List<Pickup>();
-    private Transform cart;
-    private Camera followCamera;
-    private AudioSource music;
-    private AudioSource sfx;
-    private float distance;
-    private float speed;
-    private float seconds;
-    private int coins;
-    private bool finished;
-    private bool muted;
-    private readonly List<float> segmentStarts = new List<float>();
-    private float length;
-
-    private class Pickup
+    [DefaultExecutionOrder(-100)]
+    public sealed class FirstRideBootstrap : MonoBehaviour
     {
-        public GameObject obj;
-        public float at;
-        public int kind; // 0 coin, 1 boost, 2 slowdown
-        public bool used;
-    }
+        public RideModel Model { get; private set; }
+        public RideCamera Director { get; private set; }
+        public RideHud Hud { get; private set; }
+        public bool Paused { get; private set; }
+        public bool MusicMuted => audio != null && audio.Muted;
+        RideArt art;
+        HeroCart cart;
+        RideAudio audio;
+        readonly List<Transform> pickupViews = new List<Transform>();
+        readonly List<Transform> sparks = new List<Transform>();
+        readonly Vector3[] sparkVelocity = new Vector3[24];
+        float burstLife, previousDistance, renderDistance, visualTime;
 
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-    private static void Initialize()
-    {
-        if (FindObjectOfType<FirstRideBootstrap>() == null)
-            new GameObject("FirstRideGame").AddComponent<FirstRideBootstrap>();
-    }
-
-    private void Start()
-    {
-        Application.targetFrameRate = 60;
-        RenderSettings.ambientLight = new Color(0.75f, 0.79f, 0.92f);
-        RenderSettings.fog = true;
-        RenderSettings.fogColor = new Color(0.58f, 0.79f, 0.99f);
-        RenderSettings.fogDensity = 0.002f;
-        CreateTrack();
-        CreateCart();
-        CreatePickups();
-        CreateLighting();
-        CreateAudio();
-        Restart();
-    }
-
-    // Smooth roller-coaster curve with drops, turns and hills.
-    private Vector3 TrackPoint(float t)
-    {
-        return new Vector3(110f * t - 55f,
-            14f + 8f * Mathf.Sin(t * Mathf.PI * 5f) + 5f * Mathf.Sin(t * Mathf.PI * 12f),
-            9f * Mathf.Sin(t * Mathf.PI * 3.2f) + 4f * Mathf.Sin(t * Mathf.PI * 8f));
-    }
-
-    private static Material Mat(Color c)
-    {
-        // Built-in Standard works in Built-in, and URP falls back to its default when needed.
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null) shader = Shader.Find("Standard");
-        if (shader == null) shader = Shader.Find("Sprites/Default");
-        Material m = new Material(shader);
-        m.color = c;
-        return m;
-    }
-
-    private GameObject Primitive(string name, PrimitiveType type, Vector3 position, Vector3 scale, Color color)
-    {
-        GameObject o = GameObject.CreatePrimitive(type);
-        o.name = name;
-        o.transform.position = position;
-        o.transform.localScale = scale;
-        o.GetComponent<Renderer>().material = Mat(color);
-        return o;
-    }
-
-    private void CreateTrack()
-    {
-        length = 0;
-        for (int i = 0; i <= Samples; i++)
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        static void Initialize()
         {
-            Vector3 p = TrackPoint(i / (float)Samples);
-            if (i > 0) length += Vector3.Distance(points[i - 1], p);
-            segmentStarts.Add(length);
-            points.Add(p);
+            if (FindFirstObjectByType<FirstRideBootstrap>() == null)
+                new GameObject("First Ride 2.0").AddComponent<FirstRideBootstrap>();
         }
-        GameObject rail = new GameObject("Red coaster rail");
-        LineRenderer line = rail.AddComponent<LineRenderer>();
-        line.positionCount = points.Count;
-        line.SetPositions(points.ToArray());
-        line.startWidth = line.endWidth = 1.1f;
-        line.material = Mat(new Color(0.95f, 0.13f, 0.12f));
-        line.useWorldSpace = true;
-        Primitive("Green ground", PrimitiveType.Cube, new Vector3(0, -3, 0),
-            new Vector3(160, 1, 100), new Color(0.26f, 0.72f, 0.35f));
 
-        for (int i = 0; i < points.Count; i += 18)
+        void Start()
         {
-            Vector3 p = points[i];
-            Primitive("Rail support", PrimitiveType.Cylinder,
-                new Vector3(p.x, (p.y - 2.5f) / 2f, p.z),
-                new Vector3(0.22f, Mathf.Max(0.1f, (p.y + 2.5f) / 2f), 0.22f),
-                new Color(0.17f, 0.43f, 0.7f));
+            Application.targetFrameRate = 60;
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
+            RenderSettings.ambientSkyColor = new Color(.68f, .81f, 1);
+            RenderSettings.ambientEquatorColor = new Color(.62f, .72f, .72f);
+            RenderSettings.ambientGroundColor = new Color(.33f, .4f, .28f);
+            RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear;
+            RenderSettings.fogColor = new Color(.53f, .80f, .96f); RenderSettings.fogStartDistance = 160; RenderSettings.fogEndDistance = 750;
+            foreach (var light in FindObjectsByType<Light>(FindObjectsSortMode.None)) light.enabled = false;
+            var sun = new GameObject("Green Hills sun"); sun.transform.SetParent(transform); sun.transform.rotation = Quaternion.Euler(48, -25, 0);
+            var sunlight = sun.AddComponent<Light>(); sunlight.type = LightType.Directional; sunlight.intensity = 1.5f;
+            sunlight.shadows = LightShadows.Soft;
+            art = new RideArt(transform);
+            Model = new RideModel(new RideTrack());
+            art.BuildTrack(Model.Track); art.BuildPark(Model.Track);
+            cart = new HeroCart(art); Director = new RideCamera(transform);
+            CreatePickups();
+            for (int i = 0; i < sparkVelocity.Length; i++)
+            {
+                var spark = art.Part("Pooled celebration spark", PrimitiveType.Sphere, transform, Vector3.zero, Vector3.one * .17f, RideArt.Gold);
+                spark.gameObject.SetActive(false); sparks.Add(spark);
+            }
+            audio = new RideAudio(gameObject); Hud = new RideHud(transform);
+            Model.Collected += OnCollected;
+            Model.Completed += OnCompleted;
+            Restart();
         }
-    }
 
-    private Vector3 OnTrack(float d)
-    {
-        int index = 0;
-        while (index < segmentStarts.Count - 2 && segmentStarts[index + 1] < d) index++;
-        float den = Mathf.Max(0.0001f, segmentStarts[index + 1] - segmentStarts[index]);
-        return Vector3.Lerp(points[index], points[index + 1],
-            Mathf.Clamp01((d - segmentStarts[index]) / den));
-    }
-
-    private void CreateCart()
-    {
-        cart = new GameObject("Hero cart").transform;
-        GameObject body = Primitive("Cart body", PrimitiveType.Cube, Vector3.zero,
-            new Vector3(2.2f, 0.85f, 1.7f), new Color(0.96f, 0.2f, 0.15f));
-        body.transform.SetParent(cart, false);
-        body.transform.localPosition = new Vector3(0, 0.65f, 0);
-        GameObject hero = Primitive("Placeholder hero", PrimitiveType.Sphere, Vector3.zero,
-            new Vector3(0.8f, 1.1f, 0.8f), new Color(1f, 0.65f, 0.13f));
-        hero.transform.SetParent(cart, false);
-        hero.transform.localPosition = new Vector3(0, 1.55f, 0);
-        for (int s = -1; s <= 1; s += 2)
+        void CreatePickups()
         {
-            GameObject ear = Primitive("Fox ear", PrimitiveType.Capsule, Vector3.zero,
-                new Vector3(0.27f, 0.46f, 0.25f), new Color(1f, 0.56f, 0.1f));
-            ear.transform.SetParent(cart, false);
-            ear.transform.localPosition = new Vector3(s * 0.26f, 2.35f, 0);
+            foreach (var pickup in Model.Pickups)
+            {
+                var view = art.Group(pickup.Kind.ToString());
+                view.position = Model.Track.Position(pickup.Distance) + Model.Track.Rotation(pickup.Distance) * Vector3.up * 2.1f;
+                view.rotation = Model.Track.Rotation(pickup.Distance);
+                if (pickup.Kind == PickupKind.Coin)
+                {
+                    var disc = art.Part("Gold coin rim", PrimitiveType.Cylinder, view, Vector3.zero, new Vector3(.92f, .09f, .92f), RideArt.Gold);
+                    disc.localRotation = Quaternion.Euler(90, 0, 0);
+                    for (int s = -1; s <= 1; s += 2)
+                    {
+                        var face = art.Part("Coin inset", PrimitiveType.Cylinder, view, new Vector3(0, 0, s * .1f), new Vector3(.72f, .012f, .72f), new Color(1, .88f, .29f));
+                        face.localRotation = Quaternion.Euler(90, 0, 0);
+                        var star = art.Part("Embossed diamond", PrimitiveType.Cube, view, new Vector3(0, 0, s * .125f), new Vector3(.29f, .29f, .045f), RideArt.Gold);
+                        star.localRotation = Quaternion.Euler(0, 0, 45);
+                    }
+                }
+                else
+                {
+                    bool boost = pickup.Kind == PickupKind.Boost;
+                    Color color = boost ? RideArt.Teal : RideArt.Coral;
+                    var plate = art.Part(boost ? "Turbo badge" : "Brake badge", PrimitiveType.Cube, view, Vector3.zero, new Vector3(1.4f, 1.4f, .2f), color);
+                    plate.localRotation = Quaternion.Euler(0, 0, 45);
+                    if (boost)
+                    {
+                        for (int j = 0; j < 3; j++)
+                        {
+                            var bolt = art.Part("Lightning bolt", PrimitiveType.Cube, view, new Vector3(j == 1 ? 0 : j == 0 ? .1f : -.1f, .35f - j * .34f, -.16f), new Vector3(.24f, .55f, .08f), Color.white);
+                            bolt.localRotation = Quaternion.Euler(0, 0, j == 1 ? 70 : -25);
+                        }
+                    }
+                    else for (int s = -1; s <= 1; s += 2)
+                        art.Part("Brake bars", PrimitiveType.Cube, view, new Vector3(s * .23f, 0, -.16f), new Vector3(.20f, .85f, .08f), Color.white);
+                }
+                pickupViews.Add(view);
+            }
         }
-        GameObject cam = new GameObject("First Ride Camera");
-        followCamera = cam.AddComponent<Camera>();
-        followCamera.tag = "MainCamera";
-        followCamera.clearFlags = CameraClearFlags.Skybox;
-        followCamera.fieldOfView = 67;
-        AudioListener listener = cam.AddComponent<AudioListener>();
-        // Only one listener is needed even if a scene already has a default camera.
-        foreach (AudioListener other in FindObjectsOfType<AudioListener>())
-            if (other != listener) other.enabled = false;
-    }
 
-    private void CreatePickups()
-    {
-        System.Random rng = new System.Random(20261013);
-        for (int i = 0; i < 70; i++)
+        void OnCollected(int index, PickupKind kind)
         {
-            float at = length * (0.06f + 0.88f * ((i + 0.5f) / 70f));
-            int kind = (i % 17 == 0) ? 1 : (i % 23 == 0 ? 2 : 0);
-            Vector3 p = OnTrack(at) + Vector3.up * 2.0f;
-            GameObject o = Primitive(kind == 0 ? "Coin" : kind == 1 ? "Boost" : "Slow",
-                kind == 0 ? PrimitiveType.Sphere : PrimitiveType.Cube,
-                p, kind == 0 ? Vector3.one * 0.8f : Vector3.one * 1.15f,
-                kind == 0 ? new Color(1f, 0.83f, 0.06f) :
-                kind == 1 ? Color.green : Color.red);
-            pickups.Add(new Pickup { obj = o, at = at + (float)rng.NextDouble() * 0.08f, kind = kind });
+            Vector3 origin = pickupViews[index].position;
+            pickupViews[index].gameObject.SetActive(false); audio.Play(kind); cart.React();
+            Hud.Announce(kind == PickupKind.Coin ? "+100  COIN COLLECTED!" : kind == PickupKind.Boost ? "SPEED BOOST!" : "SLOW DOWN!",
+                kind == PickupKind.Coin ? RideArt.Gold : kind == PickupKind.Boost ? RideArt.Teal : RideArt.Coral);
+            Burst(origin);
         }
-    }
-
-    private void CreateLighting()
-    {
-        GameObject sun = new GameObject("Sun");
-        Light light = sun.AddComponent<Light>();
-        light.type = LightType.Directional;
-        light.intensity = 1.3f;
-        sun.transform.rotation = Quaternion.Euler(48f, -25f, 0);
-    }
-
-    private void CreateAudio()
-    {
-        music = gameObject.AddComponent<AudioSource>();
-        music.loop = true;
-        music.volume = 0.10f;
-        music.clip = Tune();
-        music.Play();
-        sfx = gameObject.AddComponent<AudioSource>();
-        sfx.volume = 0.3f;
-    }
-
-    private AudioClip Tune()
-    {
-        // Generated original cheerful eight-second loop; no external audio files.
-        const int hz = 22050;
-        const int secondsPerLoop = 8;
-        float[] buffer = new float[hz * secondsPerLoop];
-        int[] notes = { 60, 64, 67, 72, 67, 64, 62, 67, 60, 64, 69, 72, 71, 67, 64, 60 };
-        for (int i = 0; i < buffer.Length; i++)
+        void OnCompleted() { audio.Finish(); Burst(Model.Track.Position(Model.Distance) + Vector3.up * 3); }
+        void Burst(Vector3 origin)
         {
-            float t = i / (float)hz;
-            int index = Mathf.Min(notes.Length - 1, Mathf.FloorToInt(t * 2));
-            float frequency = 440f * Mathf.Pow(2, (notes[index] - 69) / 12f);
-            float noteTime = (t * 2) % 1f;
-            float env = Mathf.Pow(1f - noteTime, 1.5f);
-            buffer[i] = 0.22f * env * (Mathf.Sin(2 * Mathf.PI * frequency * t) +
-                0.25f * Mathf.Sin(4 * Mathf.PI * frequency * t));
+            burstLife = 1;
+            for (int i = 0; i < sparks.Count; i++)
+            {
+                float angle = i * Mathf.PI * 2 / sparks.Count;
+                sparks[i].position = origin; sparks[i].gameObject.SetActive(true);
+                sparkVelocity[i] = new Vector3(Mathf.Cos(angle) * 3, 2 + i % 4, Mathf.Sin(angle) * 3);
+            }
         }
-        AudioClip clip = AudioClip.Create("Cheerful demo tune", buffer.Length, 1, hz, false);
-        clip.SetData(buffer, 0);
-        return clip;
-    }
-
-    private void Restart()
-    {
-        distance = 0;
-        speed = 13f;
-        seconds = 0;
-        coins = 0;
-        finished = false;
-        foreach (Pickup p in pickups) { p.used = false; p.obj.SetActive(true); }
-    }
-
-    private void Update()
-    {
-        if (Input.GetKeyDown(KeyCode.R)) Restart();
-        if (Input.GetKeyDown(KeyCode.M)) { muted = !muted; music.mute = muted; }
-        foreach (Pickup p in pickups)
-            if (!p.used && p.obj.activeSelf) p.obj.transform.Rotate(0, 110f * Time.deltaTime, 0);
-    }
-
-    private void FixedUpdate()
-    {
-        if (finished) return;
-        float dt = Time.fixedDeltaTime;
-        Vector3 current = OnTrack(distance);
-        Vector3 ahead = OnTrack(Mathf.Min(length, distance + 0.5f));
-        float slope = (ahead.y - current.y) / Mathf.Max(0.5f, Vector3.Distance(current, ahead));
-        float accel = 4f - slope * 12f - speed * 0.07f;
-        speed = Mathf.Clamp(speed + accel * dt, 7f, 37f);
-        distance = Mathf.Min(length, distance + speed * dt);
-        seconds += dt;
-        foreach (Pickup p in pickups)
+        public void Restart()
         {
-            if (p.used || distance < p.at) continue;
-            p.used = true;
-            p.obj.SetActive(false);
-            if (p.kind == 0) { coins++; sfx.PlayOneShot(music.clip, 0.035f); }
-            if (p.kind == 1) speed = Mathf.Min(37f, speed * 1.4f);
-            if (p.kind == 2) speed = Mathf.Max(7f, speed * 0.7f);
+            AudioListener.pause = false;
+            Model.Reset(); Paused = false; previousDistance = renderDistance = visualTime = burstLife = 0;
+            foreach (var view in pickupViews) view.gameObject.SetActive(true);
+            foreach (var spark in sparks) spark.gameObject.SetActive(false);
+            cart.Reset(); Hud.Reset(); audio.Reset(); Director.Reset(Model); PlaceCart(0);
         }
-        if (distance >= length) finished = true;
-    }
+        public void TogglePause() { Paused = !Paused; AudioListener.pause = Paused; }
+        public void ToggleCamera() { Director.Toggle(); }
+        public void ToggleMusic() { audio.ToggleMusic(); }
 
-    private void LateUpdate()
-    {
-        if (cart == null) return;
-        Vector3 at = OnTrack(distance);
-        Vector3 direction = (OnTrack(Mathf.Min(length, distance + 0.8f)) -
-            OnTrack(Mathf.Max(0, distance - 0.8f))).normalized;
-        if (direction.sqrMagnitude < 0.1f) direction = Vector3.right;
-        cart.position = at;
-        cart.rotation = Quaternion.LookRotation(direction, Vector3.up);
-        Vector3 desiredCamera = at - direction * 8f + Vector3.up * 4f;
-        followCamera.transform.position = Vector3.Lerp(followCamera.transform.position,
-            desiredCamera, Mathf.Clamp01(Time.deltaTime * 5f));
-        followCamera.transform.LookAt(at + Vector3.up * 1.4f);
-    }
-
-    private void OnGUI()
-    {
-        GUIStyle style = new GUIStyle(GUI.skin.label);
-        style.fontSize = 23;
-        style.fontStyle = FontStyle.Bold;
-        style.normal.textColor = Color.white;
-        GUI.Box(new Rect(12, 12, 400, 153), "");
-        GUI.Label(new Rect(25, 20, 450, 37), "ROLLER COASTER HEROES", style);
-        GUI.Label(new Rect(25, 60, 450, 37), "TIME  " + seconds.ToString("F1") +
-            "     SPEED  " + speed.ToString("F0"), style);
-        GUI.Label(new Rect(25, 98, 450, 37), "COINS  " + coins +
-            "     SCORE  " + (Mathf.Max(0, 10000 - 50 * seconds) + 100 * coins).ToString("F0"), style);
-        if (finished) GUI.Label(new Rect(25, 140, 450, 40), "FINISH! PRESS R TO RESTART", style);
-        GUI.Label(new Rect(25, Screen.height - 40, 480, 35), "R: RESTART   M: MUTE MUSIC", style);
+        void Update()
+        {
+#if ENABLE_INPUT_SYSTEM
+            var keyboard = Keyboard.current;
+            if (keyboard != null)
+            {
+                if (keyboard.rKey.wasPressedThisFrame) { Restart(); AudioListener.pause = false; }
+                if (keyboard.mKey.wasPressedThisFrame) ToggleMusic();
+                if (keyboard.cKey.wasPressedThisFrame) ToggleCamera();
+                if (keyboard.spaceKey.wasPressedThisFrame) TogglePause();
+            }
+#elif ENABLE_LEGACY_INPUT_MANAGER
+            if (Input.GetKeyDown(KeyCode.R)) { Restart(); AudioListener.pause = false; }
+            if (Input.GetKeyDown(KeyCode.M)) ToggleMusic();
+            if (Input.GetKeyDown(KeyCode.C)) ToggleCamera();
+            if (Input.GetKeyDown(KeyCode.Space)) TogglePause();
+#endif
+            float dt = Paused ? 0 : Time.deltaTime;
+            visualTime += dt;
+            for (int i = 0; i < pickupViews.Count; i++)
+            {
+                if (Model.Pickups[i].Collected) continue;
+                var p = Model.Pickups[i]; var frame = Model.Track.Rotation(p.Distance);
+                pickupViews[i].position = Model.Track.Position(p.Distance) + frame * Vector3.up * (2.1f + Mathf.Sin(visualTime * 3 + i) * .13f);
+                pickupViews[i].rotation = frame * Quaternion.Euler(0, p.Kind == PickupKind.Coin ? visualTime * 100 : Mathf.Sin(visualTime * 2) * 15, 0);
+            }
+            burstLife -= dt;
+            for (int i = 0; i < sparks.Count; i++)
+            {
+                if (!sparks[i].gameObject.activeSelf) continue;
+                sparks[i].gameObject.SetActive(burstLife > 0);
+                sparkVelocity[i] += Vector3.down * 8 * dt; sparks[i].position += sparkVelocity[i] * dt;
+                sparks[i].localScale = Vector3.one * Mathf.Max(0, burstLife) * .17f;
+            }
+            audio.Tick(Paused ? 0 : Model.Speed, Model.Finished);
+            Hud.Tick(Model, audio, Director.Wide, Paused, dt);
+        }
+        void FixedUpdate()
+        {
+            if (Model == null || Paused) return;
+            previousDistance = Model.Distance; Model.Step(Time.fixedDeltaTime);
+        }
+        void PlaceCart(float distance)
+        {
+            cart.Root.position = Model.Track.Position(distance); cart.Root.rotation = Model.Track.Rotation(distance);
+        }
+        void LateUpdate()
+        {
+            if (Model == null) return;
+            float dt = Paused ? 0 : Time.deltaTime;
+            float alpha = Mathf.Clamp01((Time.time - Time.fixedTime) / Time.fixedDeltaTime);
+            if (!Paused) renderDistance = Model.Finished ? Model.Distance : Mathf.Lerp(previousDistance, Model.Distance, alpha);
+            PlaceCart(renderDistance);
+            cart.Animate(dt, Model.Finished || Paused ? 0 : Model.Speed, Model.Finished, Model.Effect, Model.EffectSeconds, visualTime);
+            Director.Tick(Model, dt, false, renderDistance);
+        }
+        void OnDestroy()
+        {
+            AudioListener.pause = false;
+            art?.Dispose(); audio?.Dispose();
+        }
     }
 }
